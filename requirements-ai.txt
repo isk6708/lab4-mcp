@@ -1,0 +1,9 @@
+# MCP server + AI Assistant (MCP host). Separate from the product API's requirements.txt.
+# mcp 2.x renamed FastMCP and rewrote the client; this lab uses the stable 1.x API.
+mcp>=1.28,<2
+httpx>=0.27
+openai>=1.40
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+python-dotenv>=1.0

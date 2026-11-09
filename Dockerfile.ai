@@ -1,0 +1,18 @@
+# One image, two roles (chosen by the container command in k8s-ai.yaml):
+#   MCP server : python -m mcp_server.server --transport streamable-http
+#   Assistant  : uvicorn assistant.app:app
+FROM python:3.11-slim
+
+WORKDIR /srv
+
+COPY requirements-ai.txt .
+RUN pip install --no-cache-dir -r requirements-ai.txt
+
+COPY ./mcp_server ./mcp_server
+COPY ./assistant ./assistant
+
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8200 8300
+
+CMD ["uvicorn", "assistant.app:app", "--host", "0.0.0.0", "--port", "8300"]

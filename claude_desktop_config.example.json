@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "lab4-products-stdio": {
+      "command": "C:\\RajWork\\2026\\ESLearning\\mcp\\lab4-platform-engineering\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\RajWork\\2026\\ESLearning\\mcp\\lab4-platform-engineering\\mcp_server\\server.py",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "API_BASE_URL": "http://localhost:8121",
+        "PUBLIC_API_URL": "http://localhost:8121"
+      }
+    }
+  }
+}

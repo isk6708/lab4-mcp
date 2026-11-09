@@ -1,0 +1,159 @@
+# Lab 4 AI layer (apply after k8s-local.yaml)
+#
+#   http://assistant.platform.local  -> lab4-assistant  (MCP host + agent + UI)
+#                                         |  streamable HTTP
+#   http://mcp.platform.local/mcp    -> lab4-mcp-server (MCP server) -> platform-eng-service (product API)
+#
+# Settings and secrets come from your .env file:
+#   kubectl create secret generic lab4-ai-env --from-env-file=.env
+# The `env:` entries below override the .env values that must differ inside the cluster.
+
+# ---------------- MCP server ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab4-mcp-server
+  labels:
+    app: lab4-mcp-server
+spec:
+  replicas: 1   # stateless_http=True, so this can be scaled out
+  selector:
+    matchLabels:
+      app: lab4-mcp-server
+  template:
+    metadata:
+      labels:
+        app: lab4-mcp-server
+    spec:
+      containers:
+      - name: mcp-server
+        image: lab4-ai:v1
+        imagePullPolicy: Never
+        command: ["python", "-m", "mcp_server.server", "--transport", "streamable-http",
+                  "--host", "0.0.0.0", "--port", "8200"]
+        ports:
+        - containerPort: 8200
+        envFrom:
+        - secretRef:
+            name: lab4-ai-env
+        env:
+        - name: API_BASE_URL            # in-cluster address of the product API
+          value: http://platform-eng-service
+        - name: PUBLIC_API_URL          # what users open in a browser
+          value: http://platform.local
+        resources:
+          requests: { cpu: "50m", memory: "96Mi" }
+          limits:   { cpu: "300m", memory: "256Mi" }
+        readinessProbe:
+          tcpSocket: { port: 8200 }
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket: { port: 8200 }
+          initialDelaySeconds: 10
+          periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab4-mcp-service
+spec:
+  selector:
+    app: lab4-mcp-server
+  ports:
+  - port: 80
+    targetPort: 8200
+---
+# ---------------- AI Assistant (MCP host) ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab4-assistant
+  labels:
+    app: lab4-assistant
+spec:
+  replicas: 1   # conversations are kept in memory: keep a single replica
+  selector:
+    matchLabels:
+      app: lab4-assistant
+  template:
+    metadata:
+      labels:
+        app: lab4-assistant
+    spec:
+      containers:
+      - name: assistant
+        image: lab4-ai:v1
+        imagePullPolicy: Never
+        command: ["uvicorn", "assistant.app:app", "--host", "0.0.0.0", "--port", "8300"]
+        ports:
+        - containerPort: 8300
+        envFrom:
+        - secretRef:
+            name: lab4-ai-env
+        env:
+        - name: MCP_TRANSPORT           # switch to "stdio" to run the MCP server inside this pod instead
+          value: streamable_http
+        - name: MCP_URL
+          value: http://lab4-mcp-service/mcp
+        - name: API_BASE_URL            # only used in stdio mode (child MCP server -> API)
+          value: http://platform-eng-service
+        - name: PUBLIC_API_URL
+          value: http://platform.local
+        - name: OLLAMA_BASE_URL         # Ollama running on your Windows host
+          value: http://host.docker.internal:11434/v1
+        resources:
+          requests: { cpu: "50m", memory: "128Mi" }
+          limits:   { cpu: "500m", memory: "384Mi" }
+        readinessProbe:
+          httpGet: { path: /health, port: 8300 }
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: { path: /health, port: 8300 }
+          initialDelaySeconds: 10
+          periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab4-assistant-service
+spec:
+  selector:
+    app: lab4-assistant
+  ports:
+  - port: 80
+    targetPort: 8300
+---
+# ---------------- Ingress ----------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lab4-ai-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "40m"     # base64 PDF uploads through MCP
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"  # local LLMs on CPU can be slow
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"     # streamable HTTP may stream responses
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: assistant.platform.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: lab4-assistant-service
+            port: { number: 80 }
+  - host: mcp.platform.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: lab4-mcp-service
+            port: { number: 80 }
