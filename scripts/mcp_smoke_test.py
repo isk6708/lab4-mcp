@@ -51,12 +51,17 @@ async def call(session: ClientSession, name: str, args: dict = None, expect_erro
 async def run_checks(session: ClientSession, write: bool) -> None:
     tools = (await session.list_tools()).tools
     print(f"Connected. {len(tools)} tools: {', '.join(t.name for t in tools)}")
-    if len(tools) != 12:
+    if len(tools) != 14:
         failures.append("tool count")
 
     await call(session, "health_check")
     await call(session, "list_products")
     await call(session, "search_product_specs", {"query": "warranty"})
+    await call(session, "list_knowledge_documents")
+    rag = json.loads(await call(session, "search_knowledge", {"question": "Why is my pod in CrashLoopBackOff?", "top_k": 3}))
+    print(f"    retrieval mode: {rag.get('mode')}  coverage: {rag.get('coverage')}")
+    if rag.get("mode") == "keyword":
+        print("    (keyword fallback: run  ollama pull nomic-embed-text  then  POST /knowledge/sync  for vector search)")
     await call(session, "get_product", {"product_id": 999999}, expect_error=True)  # error path
 
     if not write:

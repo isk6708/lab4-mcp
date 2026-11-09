@@ -178,6 +178,28 @@ async def search_product_specs(query: str, product_id: Optional[int] = None, lim
 
 
 @mcp.tool()
+async def search_knowledge(question: str, top_k: int = 5, product_id: Optional[int] = None,
+                           source: str = "all", doc_type: Optional[str] = None) -> dict:
+    """Semantic search (by meaning) over product spec sheets AND the platform knowledge base
+    (runbooks, postmortems, blueprints). Use it for 'why', 'how do I', troubleshooting and
+    standards questions, or when exact keywords may not appear. Returns ranked chunks with a
+    citation, relevance_score and last_updated; cite them in your answer.
+    source: all | specs | knowledge. doc_type: runbook | postmortem | blueprint."""
+    params = {"q": question, "top_k": top_k, "source": source}
+    if product_id is not None:
+        params["product_id"] = product_id
+    if doc_type:
+        params["doc_type"] = doc_type
+    return await _request("GET", "/retrieve", params=params)
+
+
+@mcp.tool()
+async def list_knowledge_documents() -> list:
+    """List the knowledge base documents (runbooks, postmortems, blueprints) with owner and last-updated date."""
+    return await _request("GET", "/knowledge")
+
+
+@mcp.tool()
 async def upload_product_attachment(product_id: int, file_path: Optional[str] = None,
                                     pdf_base64: Optional[str] = None,
                                     filename: Optional[str] = None) -> dict:

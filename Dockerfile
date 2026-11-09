@@ -6,13 +6,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./app ./app
+# organizational knowledge (runbooks, postmortems, blueprints) loaded at startup
+COPY ./knowledge ./knowledge
 
 # /app/data holds the SQLite DB and uploaded PDFs; in Kubernetes it is a persistent volume
 RUN mkdir -p /app/data/uploads
 
 ENV PYTHONUNBUFFERED=1 \
     PORT=8121 \
-    DATA_DIR=/app/data
+    DATA_DIR=/app/data \
+    KNOWLEDGE_DIR=/app/knowledge
 
 EXPOSE 8121
 

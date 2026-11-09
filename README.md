@@ -6,7 +6,7 @@ You can run it three ways:
 
 - **Local, no Docker:** everything runs as Python processes on your PC. Fastest for development and testing (section 5).
 - **Docker, no Kubernetes:** three containers with Docker Compose, one command to start (section 6).
-- **Kubernetes:** Docker Desktop Kubernetes with an Ingress, like a real platform (sections 7–10).
+- **Kubernetes:** Docker Desktop Kubernetes with an Ingress, like a real platform (sections 7–11).
 
 Companion to *Agentic AI for Platform Engineering* (Packt, 2026); chapter summaries are in `notes\`.
 
@@ -23,16 +23,17 @@ Companion to *Agentic AI for Platform Engineering* (Packt, 2026); chapter summar
 7. [Kubernetes: one-time setup](#7-kubernetes-one-time-setup)
 8. [Kubernetes: deploy the product API](#8-kubernetes-deploy-the-product-api)
 9. [Using the product and PDF spec API](#9-using-the-product-and-pdf-spec-api)
-10. [Kubernetes: deploy the AI layer](#10-kubernetes-deploy-the-ai-layer)
-11. [.env reference](#11-env-reference)
-12. [The MCP server](#12-the-mcp-server)
-13. [Use the MCP server from Claude Desktop and other hosts](#13-use-the-mcp-server-from-claude-desktop-and-other-hosts)
-14. [What is agentic AI? (with this lab)](#14-what-is-agentic-ai-with-this-lab)
-15. [Demo script for class](#15-demo-script-for-class)
-16. [Updating after code changes](#16-updating-after-code-changes)
-17. [Troubleshooting](#17-troubleshooting)
-18. [Clean up](#18-clean-up)
-19. [Limitations and security notes](#19-limitations-and-security-notes)
+10. [Knowledge base and RAG (Chapter 4)](#10-knowledge-base-and-rag-chapter-4)
+11. [Kubernetes: deploy the AI layer](#11-kubernetes-deploy-the-ai-layer)
+12. [.env reference](#12-env-reference)
+13. [The MCP server](#13-the-mcp-server)
+14. [Use the MCP server from Claude Desktop and other hosts](#14-use-the-mcp-server-from-claude-desktop-and-other-hosts)
+15. [What is agentic AI? (with this lab)](#15-what-is-agentic-ai-with-this-lab)
+16. [Demo script for class](#16-demo-script-for-class)
+17. [Updating after code changes](#17-updating-after-code-changes)
+18. [Troubleshooting](#18-troubleshooting)
+19. [Clean up](#19-clean-up)
+20. [Limitations and security notes](#20-limitations-and-security-notes)
 
 ---
 
@@ -43,12 +44,14 @@ Companion to *Agentic AI for Platform Engineering* (Packt, 2026); chapter summar
               │ agent loop + approvals
               │ MCP client (stdio or streamable HTTP)
               ▼
- Claude Desktop / VS Code / Claude Code ─► MCP server (12 tools)
+ Claude Desktop / VS Code / Claude Code ─► MCP server (14 tools)
                                                │ HTTP
                                                ▼
  curl / Swagger ──────────────────────────► Product API (FastAPI)
-                                               │
-                                   data\app_platform.db + data\uploads\*.pdf
+                                               │                       ╲
+                                   data\app_platform.db             Ollama nomic-embed-text
+                                   data\uploads\*.pdf               (embeddings for RAG)
+                                   knowledge\*.md (runbooks, postmortem, blueprint)
 ```
 
 | Component | Local (no Docker) | Docker Compose | Kubernetes |
@@ -58,7 +61,7 @@ Companion to *Agentic AI for Platform Engineering* (Packt, 2026); chapter summar
 | MCP server (stdio) | started by the host as a child process | inside the assistant container (optional) | inside the assistant pod (optional) |
 | AI Assistant | http://localhost:8300 | http://localhost:8300 | http://assistant.platform.local |
 | Data | `.\data\` in the project folder | Docker volume `lab4_lab4-data` | PVC `lab4-data` |
-| Start with | section 5 | section 6 | sections 7–10 |
+| Start with | section 5 | section 6 | sections 7–11 |
 
 Kubernetes objects:
 
@@ -77,17 +80,25 @@ Kubernetes objects:
 lab4-platform-engineering\
 ├── app\                        Product API (FastAPI)
 │   ├── main.py                   products, PDF attachments, chunks, keyword search
-│   └── pdf_utils.py              PDF check, text extraction, page-aware chunking
+│   ├── db.py                     database models (products, specs, chunks, knowledge documents)
+│   ├── pdf_utils.py              PDF check, text extraction, page-aware chunking
+│   ├── knowledge.py              Markdown metadata header + heading-aware chunking
+│   ├── embeddings.py             embedding client (Ollama or OpenAI)
+│   ├── vectors.py                cosine similarity, keyword scoring, ranking
+│   └── knowledge_service.py      knowledge sync, embedding, retrieval (/retrieve)
 ├── mcp_server\
-│   └── server.py               MCP server: 12 tools wrapping the API (stdio / streamable HTTP)
+│   └── server.py               MCP server: 14 tools wrapping the API (stdio / streamable HTTP)
 ├── assistant\                  AI Assistant = MCP host
 │   ├── app.py                    web API + approval handling + upload button
 │   ├── agent.py                  the agent loop (ReAct), step budget, approvals
+│   ├── rag.py                    RAG mode and /api/ask: retrieve, then answer with citations
 │   ├── llm.py                    OpenAI / Ollama providers from .env
 │   ├── mcp_client.py             MCP client over stdio or streamable HTTP
 │   └── static\index.html         chat UI
+├── knowledge\                  organizational knowledge for RAG (runbooks, postmortem, blueprint)
 ├── scripts\
-│   └── mcp_smoke_test.py       tests the MCP server directly, no LLM needed
+│   ├── mcp_smoke_test.py       tests the MCP server directly, no LLM needed
+│   └── rag_eval.py             measures retrieval hit rate and MRR
 ├── samples\
 │   └── platform-component-spec.pdf   demo spec sheet (fictional, 2 pages)
 ├── notes\                      chapter summaries (.docx)
@@ -148,7 +159,7 @@ copy .env.example .env
 notepad .env
 ```
 
-The defaults in `.env.example` are set for the **local** path (`localhost` URLs). For Docker and Kubernetes, `docker-compose.yml` and `k8s-ai.yaml` set the container URLs themselves, so the same `.env` works for all three. Add `OPENAI_API_KEY` if you have one. All settings are explained in section 11.
+The defaults in `.env.example` are set for the **local** path (`localhost` URLs). For Docker and Kubernetes, `docker-compose.yml` and `k8s-ai.yaml` set the container URLs themselves, so the same `.env` works for all three. Add `OPENAI_API_KEY` if you have one. All settings are explained in section 12.
 
 `.env` holds secrets. It is in `.gitignore` and `.dockerignore`, so it is never committed or baked into an image.
 
@@ -157,11 +168,13 @@ The defaults in `.env.example` are set for the **local** path (`localhost` URLs)
 ```cmd
 ollama pull qwen2.5:7b
 ollama pull llama3.2
+ollama pull nomic-embed-text
 ollama list
 ```
 
 | Model | Size | Notes |
 |---|---|---|
+| `nomic-embed-text` | ~270 MB | Embedding model for RAG (turns text into vectors); not a chat model |
 | `qwen2.5:7b` | ~4.7 GB | Recommended free default; follows tool instructions well |
 | `llama3.2` | ~2 GB (3B) | Fast but small; sometimes picks the wrong tool. Good for showing why model size matters for agents |
 
@@ -186,7 +199,7 @@ Ports used: **8121** (API), **8200** (MCP over HTTP), **8300** (assistant), **11
 uvicorn app.main:app --port 8121 --reload
 ```
 
-`--reload` restarts it when you edit code in `app\`. Data goes to `.\data\app_platform.db` and `.\data\uploads\`. The console prints the seeded `admin` user on first start.
+`--reload` restarts it when you edit code in `app\`. Data goes to `.\data\app_platform.db` and `.\data\uploads\`. The console prints the seeded `admin` user on first start, then a `Knowledge sync:` line once `knowledge\` is loaded and embedded (needs Ollama with `nomic-embed-text`; without it, retrieval uses keyword mode).
 
 Open Swagger UI at http://localhost:8121/docs. You can test every endpoint there, including the PDF upload button.
 
@@ -218,7 +231,7 @@ The API from 5.1 must be running. The smoke-test script starts the MCP server as
 python scripts\mcp_smoke_test.py
 ```
 
-It lists the 12 tools and runs read-only checks (`health_check`, `list_products`, `search_product_specs`, and an expected "not found" error). For the full round trip (create a temporary product, upload the sample PDF, read page 2, search, then delete everything again):
+It lists the 14 tools and runs read-only checks (`health_check`, `list_products`, `search_product_specs`, `list_knowledge_documents`, `search_knowledge`, and an expected "not found" error). It also prints whether retrieval runs in `vector` or `keyword` mode. For the full round trip (create a temporary product, upload the sample PDF, read page 2, search, then delete everything again):
 
 ```cmd
 python scripts\mcp_smoke_test.py --write
@@ -271,11 +284,11 @@ Open http://localhost:8300.
 - With `MCP_TRANSPORT=stdio` (the default), the header shows `MCP: stdio (child process…)`. The assistant starts the MCP server itself, so terminal 3 is not needed.
 - To use the HTTP server from 5.4 instead, set `MCP_TRANSPORT=streamable_http` in `.env` (`MCP_URL` is already `http://localhost:8200/mcp`) and restart the assistant. The header then shows `MCP: streamable HTTP (…)`.
 
-The left panel should list 12 tools. Try the demo in section 15.
+The left panel should list 14 tools. Try the demo in section 16, and the RAG examples in section 10.
 
 ### 5.7 Use Claude Desktop with the local MCP server
 
-See section 13. `claude_desktop_config.example.json` already points to `http://localhost:8121`.
+See section 14. `claude_desktop_config.example.json` already points to `http://localhost:8121`.
 
 ### 5.8 Mixed: local AI layer against the Kubernetes API
 
@@ -340,6 +353,7 @@ Open the assistant at http://localhost:8300. The header shows `MCP: streamable H
 
 ### 6.3 How the containers are wired
 
+- `api` reaches Ollama on your PC at `http://host.docker.internal:11434/v1` for embeddings, and reads `knowledge\` through a read-only mount, so edited runbooks only need `POST /knowledge/sync`.
 - `mcp` reaches the API at `http://api:8121` (service name), and gives users download links on `http://localhost:8121`.
 - `assistant` reaches the MCP server at `http://mcp:8200/mcp`, and Ollama on your PC at `http://host.docker.internal:11434/v1`.
 - `docker-compose.yml` overrides the `.env` values that must differ inside containers (`API_BASE_URL`, `PUBLIC_API_URL`, `MCP_URL`, `OLLAMA_BASE_URL`, `MCP_ALLOWED_HOSTS`), so the same `.env` works for local, Docker and Kubernetes.
@@ -457,6 +471,14 @@ curl http://platform.local/products/1
 
 Data is still there because `/app/data` is on the `lab4-data` volume.
 
+### Knowledge base and embeddings
+
+The `knowledge\` folder is built into the image and loaded on startup. The API reaches Ollama on your PC through `host.docker.internal` for embeddings (see Troubleshooting if it cannot). Embedding settings and an OpenAI key can come from the optional `lab4-ai-env` secret created in section 11; after creating or changing it, run `kubectl rollout restart deployment platform-eng-app`.
+
+```cmd
+curl http://platform.local/knowledge/status
+```
+
 ### Seeded user
 
 ```cmd
@@ -535,7 +557,12 @@ In PowerShell use `$BASE="http://localhost:8121"` and `curl.exe "$BASE/health"`.
 | GET | `/attachments/{id}/download` | Original PDF |
 | GET | `/attachments/{id}/chunks` | Chunks ready for embedding |
 | DELETE | `/attachments/{id}` | Remove attachment, chunks and file |
-| GET | `/search?q=&product_id=&limit=` | Keyword search over chunks |
+| GET | `/search?q=&product_id=&limit=` | Keyword search over spec chunks (exact words) |
+| GET | `/retrieve?q=&top_k=&product_id=&source=&doc_type=&min_score=` | **Retriever** for RAG: specs + knowledge by meaning, with citations (section 10) |
+| GET | `/knowledge` | Knowledge documents (runbooks, postmortems, blueprints) |
+| GET | `/knowledge/status` | Embedding provider and how many chunks have vectors |
+| POST | `/knowledge/sync` | Re-read `knowledge\` (changed files only) and embed missing chunks |
+| POST | `/knowledge/reembed` | Re-embed chunks after changing the embedding model |
 
 Upload responses: `201` stored · `409` already attached · `413` too large · `415` not a PDF · `422` corrupt or encrypted. `status: "no_text"` means a scanned PDF with no text layer: it is stored but not searchable until OCR is added.
 
@@ -543,7 +570,141 @@ On startup the API seeds `admin` / `123456` (stored as a bcrypt hash), ready for
 
 ---
 
-## 10. Kubernetes: deploy the AI layer
+## 10. Knowledge base and RAG (Chapter 4)
+
+Chapter 4 says an AI system needs three kinds of context. Lab 4 has all three:
+
+| Context (Chapter 4) | In Lab 4 | Reached through |
+|---|---|---|
+| **Prompt context** | Instructions in `assistant/agent.py` and `assistant/rag.py` | The system prompt |
+| **Organizational knowledge** | Product spec PDFs + `knowledge\` (runbooks, a postmortem, a blueprint) | **RAG**: `search_knowledge` → `/retrieve` |
+| **Live platform context** | Current products, prices, stock, attachments | **MCP tools**: `list_products`, `get_product`, … |
+
+The chapter's rule of thumb: **RAG for accumulated knowledge, MCP for live system state.**
+
+### 10.1 The six RAG components in Lab 4
+
+| # | Component | Lab 4 | Book's Lab 2 |
+|---|---|---|---|
+| 1 | Knowledge sources | Spec PDFs (uploaded) + Markdown in `knowledge\` | Markdown runbooks, postmortem, blueprints |
+| 2 | Ingestion and embeddings | `pdf_utils.py` / `knowledge.py` chunking + `embeddings.py` (Ollama `nomic-embed-text`, or OpenAI) | Chunking + small CPU embedding model |
+| 3 | Vector database | float32 vectors stored next to each chunk in SQLite (`db.py`) | Postgres + pgvector |
+| 4 | Retriever | `GET /retrieve`: cosine similarity, keyword fallback (`knowledge_service.py`, `vectors.py`) | One cosine-distance query |
+| 5 | LLM | OpenAI or Ollama, chosen in the UI | Amazon Bedrock / Anthropic API |
+| 6 | Orchestration | Assistant **RAG mode** and `POST /api/ask` (`assistant/rag.py`) | FastAPI `/ask` |
+
+Answers cite their sources with **citation, relevance score, last-updated date and owner**, as the chapter recommends.
+
+### 10.2 The knowledge folder
+
+```
+knowledge\
+├── _template.md                         standard format (files starting with _ are not loaded)
+├── runbooks\                            crashloopbackoff, ingress-413-upload-too-large,
+│                                        errimageneverpull, pvc-pending, ollama-unreachable
+├── postmortems\2026-11-pdf-upload-413.md
+└── blueprints\standard-service.md
+```
+
+Every document starts with the same metadata header (the chapter's "standardized knowledge types"):
+
+```
+---
+title: Pod in CrashLoopBackOff
+type: runbook            # runbook | postmortem | blueprint
+owner: platform-team
+last_updated: 2026-11-09
+tags: [kubernetes, pod, crashloopbackoff]
+---
+```
+
+Documents are split by heading (`## Fix`, `## Diagnose`, …), so a citation points to a section, for example `runbooks/crashloopbackoff.md > Pod in CrashLoopBackOff > Fix`.
+
+**Synchronization** (the chapter's "knowledge synchronization pattern"): on startup, and on `POST /knowledge/sync`, the API reads `knowledge\`, skips files whose SHA-256 is unchanged, re-chunks changed files, removes deleted ones, and embeds every chunk that has no vector yet. Startup sync runs in the background, so the API is healthy immediately.
+
+### 10.3 Embeddings
+
+| `EMBEDDING_PROVIDER` | Model | Cost | Setup |
+|---|---|---|---|
+| `ollama` (default) | `nomic-embed-text` (768 dimensions) | Free | `ollama pull nomic-embed-text` |
+| `openai` | `text-embedding-3-small` (1536 dimensions) | Paid | `OPENAI_API_KEY` in `.env` |
+| `none` | – | – | Keyword search only |
+
+- Spec PDFs are embedded during upload. If the provider is unreachable, the upload still succeeds and the chunks are embedded by the next sync.
+- If no vectors are available, `/retrieve` uses **keyword** scoring and says so in its `mode` and `note` fields. Nothing breaks.
+- **Changing the embedding model** changes the vectors (and usually their length). Run `POST /knowledge/reembed` or `POST /knowledge/sync` to re-embed everything with the new model. Vectors from another model are ignored until then.
+
+### 10.4 Try it with curl
+
+Set `BASE` as in section 9 (`http://localhost:8121` for local and Docker, `http://platform.local` for Kubernetes).
+
+```cmd
+:: embedding provider and how many chunks have vectors
+curl %BASE%/knowledge/status
+
+:: documents loaded from knowledge\
+curl %BASE%/knowledge
+
+:: the retriever: ranked chunks with citation, relevance_score, last_updated
+curl "%BASE%/retrieve?q=Why+is+my+pod+in+CrashLoopBackOff&top_k=3"
+
+:: only runbooks / only spec sheets / one product's specs
+curl "%BASE%/retrieve?q=upload+rejected&source=knowledge&doc_type=runbook"
+curl "%BASE%/retrieve?q=how+long+is+the+guarantee&source=specs"
+curl "%BASE%/retrieve?q=memory+limit&product_id=1"
+
+:: re-read knowledge\ and embed anything missing
+curl -X POST %BASE%/knowledge/sync
+```
+
+`"mode": "vector"` means meaning-based search is working. Try `q=how long is the guarantee`: vector search should find the spec's **warranty** section even though the word "guarantee" never appears in it. Keyword search has no way to connect the two words.
+
+Full RAG answer (retrieve, then the LLM answers with citations), like the book's `/ask`. This runs on the **assistant** (`http://localhost:8300` local and Docker, `http://assistant.platform.local` Kubernetes):
+
+```cmd
+curl -X POST "http://localhost:8300/api/ask" -H "Content-Type: application/json" -d "{\"question\":\"Why is my pod in CrashLoopBackOff?\"}"
+
+curl -X POST "http://localhost:8300/api/ask" -H "Content-Type: application/json" -d "{\"question\":\"What warranty does Platform Component have?\",\"provider\":\"openai\",\"model\":\"gpt-4.1-mini\"}"
+```
+
+The response has `answer`, `sources` (with `relevance_score`, `last_updated`, `owner`) and `retrieval_mode`. Without `provider` and `model`, it uses `LLM_DEFAULT_PROVIDER` and `LLM_DEFAULT_MODEL` from `.env`.
+
+### 10.5 Measure retrieval quality
+
+The chapter asks for a regular evaluation loop. `scripts\rag_eval.py` asks 10 questions with known answers and reports the **hit rate** (expected document in the top k) and **MRR** (how high it ranks):
+
+```cmd
+python scripts\rag_eval.py
+python scripts\rag_eval.py --base http://platform.local --k 3
+```
+
+Run it once with `EMBEDDING_PROVIDER=none` (keyword) and once with `ollama` (vector), and compare. On this small corpus keyword search already finds most documents; the difference shows in the ranking and on questions that use different words from the documents. Add your own questions to `CASES` in the script when you add documents.
+
+### 10.6 RAG vs MCP in the assistant
+
+Pick **RAG** in the Mode dropdown, or let **Agent** mode decide:
+
+| Ask | Best answered by | Why |
+|---|---|---|
+| "Why is my pod in CrashLoopBackOff?" | RAG (runbook) | Accumulated knowledge |
+| "What warranty does Platform Component have?" | RAG (spec PDF, page 2) | Organizational knowledge |
+| "How many Platform Components are in stock right now?" | MCP (`list_products`) | Live state; a document would be stale |
+| "Is the product with the 24-month warranty in stock?" | Agent: RAG **and** MCP | Needs both kinds of context |
+
+In Agent mode, open **Show steps** to see the model choose `search_knowledge` for knowledge and `list_products` for live data.
+
+### 10.7 Add your own knowledge
+
+1. Copy `knowledge\_template.md` to, for example, `knowledge\runbooks\my-issue.md`, and fill in the header and sections.
+2. Load it:
+   - **Local:** `curl -X POST http://localhost:8121/knowledge/sync` (or restart the API).
+   - **Docker Compose:** `knowledge\` is mounted into the container, so the same `curl` is enough.
+   - **Kubernetes:** the folder is built into the image: `docker build -t lab4-fastapi:v2 .` then `kubectl rollout restart deployment platform-eng-app`.
+3. Check with `curl %BASE%/knowledge` and ask the assistant about it.
+
+---
+
+## 11. Kubernetes: deploy the AI layer
 
 Do section 8 first; the AI layer calls `platform-eng-service`.
 
@@ -581,7 +742,7 @@ kubectl rollout restart deployment lab4-assistant lab4-mcp-server
 
 ---
 
-## 11. .env reference
+## 12. .env reference
 
 | Variable | Default in `.env.example` | Meaning |
 |---|---|---|
@@ -595,6 +756,12 @@ kubectl rollout restart deployment lab4-assistant lab4-mcp-server
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Any OpenAI-compatible endpoint works |
 | `OPENAI_MODELS` | `gpt-4.1-mini,gpt-5-mini` | Models listed for OpenAI |
 | `LLM_TIMEOUT_SECONDS` | `300` | How long to wait for a model |
+| `EMBEDDING_PROVIDER` | `ollama` | Embeddings for RAG: `ollama` (free), `openai` (paid) or `none` (keyword search only) |
+| `EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model; OpenAI default is `text-embedding-3-small`. Re-embed after changing it |
+| `EMBEDDING_BASE_URL` | *(unset)* | Optional: embeddings endpoint if different from `OLLAMA_BASE_URL` / `OPENAI_BASE_URL` |
+| `RAG_TOP_K` | `5` | Passages the assistant's RAG mode puts into the prompt |
+| `KNOWLEDGE_DIR` | `.\knowledge` | Optional: folder of Markdown knowledge documents |
+| `KNOWLEDGE_SYNC_ON_STARTUP` | `true` | Optional: load and embed `knowledge\` when the API starts |
 | `AGENT_MAX_STEPS` | `6` | Default step budget for Agent mode |
 | `APPROVAL_TOOLS` | create/update/delete/upload tools | Tools that pause for Approve/Reject |
 | `MCP_TRANSPORT` | `stdio` | How the assistant reaches the MCP server: `stdio` or `streamable_http` |
@@ -606,13 +773,13 @@ kubectl rollout restart deployment lab4-assistant lab4-mcp-server
 | `MCP_ALLOWED_HOSTS` | localhost, mcp.platform.local, lab4-mcp-service (Compose adds `mcp`) | Optional: Host headers the MCP HTTP server accepts (DNS-rebinding protection) |
 | `MCP_ALLOWED_ORIGINS` | localhost, assistant.platform.local | Optional: browser origins the MCP HTTP server accepts |
 
-The assistant, the MCP server and the smoke-test script all read `.env` from the project folder. Real environment variables (such as those set in `docker-compose.yml` or `k8s-ai.yaml`) take priority. The product API (`app\`) does not use `.env`; it has its own defaults, and gets its settings from `docker-compose.yml` in Docker and from `k8s-local.yaml` in Kubernetes.
+The product API, the assistant, the MCP server and the scripts all read `.env` from the project folder. Real environment variables (such as those set in `docker-compose.yml`, `k8s-local.yaml` or `k8s-ai.yaml`) take priority. The API uses only the embedding settings (and `OLLAMA_BASE_URL` / `OPENAI_API_KEY` for them); its database and file settings come from its own defaults or the deployment files.
 
 Switching provider and model is done **in the UI** (header dropdowns); the choice is remembered in your browser.
 
 ---
 
-## 12. The MCP server
+## 13. The MCP server
 
 `mcp_server/server.py` wraps every API endpoint as an MCP tool. The API stays the source of truth; MCP gives any AI host a standard way to call it.
 
@@ -627,7 +794,9 @@ Switching provider and model is done **in the UI** (header dropdowns); the choic
 | `list_product_attachments` | `GET /products/{id}/attachments` | |
 | `get_attachment` | `GET /attachments/{id}` + download link | |
 | `get_attachment_chunks` | `GET /attachments/{id}/chunks` (optionally one page) | |
-| `search_product_specs` | `GET /search` | |
+| `search_product_specs` | `GET /search` (exact keywords) | |
+| `search_knowledge` | `GET /retrieve` (by meaning, specs + runbooks, with citations) | |
+| `list_knowledge_documents` | `GET /knowledge` | |
 | `upload_product_attachment` | `POST /products/{id}/attachments` (file path or base64) | 🔒 |
 | `delete_attachment` | `DELETE /attachments/{id}` | 🔒 |
 
@@ -650,14 +819,14 @@ The server uses the MCP Python SDK **1.x** (`mcp>=1.28,<2`). SDK 2.0 renamed `Fa
 
 ---
 
-## 13. Use the MCP server from Claude Desktop and other hosts
+## 14. Use the MCP server from Claude Desktop and other hosts
 
 **Claude Desktop (stdio):** needs the venv from section 4.1.
 
 1. Open Claude Desktop → Settings → Developer → Edit Config.
 2. Merge in the `mcpServers` block from `claude_desktop_config.example.json`. Fix the paths if your folder differs.
 3. `API_BASE_URL` in that block is `http://localhost:8121`, which works when the API runs locally (section 5.1) or in Docker Compose (section 6). If your API runs in Kubernetes, change both URLs to `http://platform.local`.
-4. Save and restart Claude Desktop. The 12 tools appear in Claude's tool menu. Claude Desktop asks for its own permission before running tools.
+4. Save and restart Claude Desktop. The 14 tools appear in Claude's tool menu. Claude Desktop asks for its own permission before running tools.
 
 **Claude Code (streamable HTTP):**
 
@@ -674,13 +843,14 @@ This is the point of MCP: build the tools once, then use them from any host.
 
 ---
 
-## 14. What is agentic AI? (with this lab)
+## 15. What is agentic AI? (with this lab)
 
 The assistant has three **modes** (header dropdown) so the difference is visible:
 
 | Mode | What happens | Can it see your data? |
 |---|---|---|
 | **Chat only** | One LLM call. The model answers from what it learned in training. | No |
+| **RAG** | The host retrieves passages (specs + runbooks), then one LLM call answers from them with citations. No tool choice by the model. | Documents only |
 | **Assistant** | The model may call tools **once**, then must answer. | One look |
 | **Agent** | The model works in a **loop** until the job is done, within the step budget. | As many looks as it needs |
 
@@ -713,7 +883,7 @@ The **Attach a spec PDF** button in the sidebar is a *button-triggered workflow*
 
 ---
 
-## 15. Demo script for class
+## 16. Demo script for class
 
 Works the same locally or in Docker (http://localhost:8300) and in Kubernetes (http://assistant.platform.local).
 
@@ -723,20 +893,25 @@ Works the same locally or in Docker (http://localhost:8300) and in Kubernetes (h
 4. **Agent** → "Create a product called Edge Gateway, price 150, stock 10". The approval card appears. **Reject**, then ask again and **Approve**.
 5. Switch **llama3.2 → qwen2.5:7b → OpenAI** and compare tool choices, speed and answer quality.
 6. Upload `samples\platform-component-spec.pdf` to a new product with the **Attach a spec PDF** button, then ask about it.
-7. Run `python scripts\mcp_smoke_test.py` to show the same tools driven by a fixed script instead of an agent.
+7. **RAG** → "Why is my pod in CrashLoopBackOff?" The answer cites the runbook sections with scores and dates. Then ask "How many are in stock?" in RAG mode: documents can't answer live questions.
+8. **Agent** → "Is the product with the 24-month warranty in stock?" It uses `search_knowledge` (RAG) **and** `list_products` (MCP): Chapter 4's point in one question.
+9. Run `python scripts\rag_eval.py` with `EMBEDDING_PROVIDER=none` and then `ollama` to compare keyword and vector retrieval.
+10. Run `python scripts\mcp_smoke_test.py` to show the same tools driven by a fixed script instead of an agent.
 
 On a laptop CPU, a local-model agent turn can take 30–90 seconds; OpenAI answers in a few seconds.
 
 ---
 
-## 16. Updating after code changes
+## 17. Updating after code changes
 
 | Changed | Local (no Docker) | Docker Compose | Kubernetes |
 |---|---|---|---|
 | `app\` | auto-reloads with `--reload` | `docker compose up -d --build api` | `docker build -t lab4-fastapi:v2 .` then `kubectl rollout restart deployment platform-eng-app` |
 | `assistant\` or `mcp_server\` | assistant auto-reloads; MCP stdio is picked up on the next request; restart the MCP HTTP server (terminal 3) | `docker compose up -d --build mcp assistant` | `docker build -f Dockerfile.ai -t lab4-ai:v1 .` then `kubectl rollout restart deployment lab4-assistant lab4-mcp-server` |
 | `requirements*.txt` | `pip install -r requirements.txt -r requirements-ai.txt` | `docker compose up -d --build` | rebuild the image, then restart |
-| `.env` | restart the assistant and the MCP HTTP server | `docker compose up -d --force-recreate mcp assistant` | recreate the secret (section 10) and restart both AI deployments |
+| `.env` | restart the assistant and the MCP HTTP server | `docker compose up -d --force-recreate mcp assistant` | recreate the secret (section 11) and restart both AI deployments |
+| `knowledge\*.md` | `curl -X POST http://localhost:8121/knowledge/sync` | `curl -X POST http://localhost:8121/knowledge/sync` (folder is mounted) | `docker build -t lab4-fastapi:v2 .` then `kubectl rollout restart deployment platform-eng-app` |
+| `EMBEDDING_MODEL` | restart the API, then `POST /knowledge/reembed` | `docker compose up -d --force-recreate api`, then `POST /knowledge/reembed` | update the secret, restart `platform-eng-app`, then `POST /knowledge/reembed` |
 | `docker-compose.yml` | n/a | `docker compose up -d` | n/a |
 | `k8s-*.yaml` | n/a | n/a | `kubectl apply -f <file>` |
 
@@ -744,7 +919,7 @@ Docker Desktop's Kubernetes uses your local images directly (`imagePullPolicy: N
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 ### Local (no Docker)
 
@@ -796,7 +971,12 @@ Docker Desktop's Kubernetes uses your local images directly (`imagePullPolicy: N
 | Tools panel: "Cannot connect to the MCP server" | stdio: install `requirements-ai.txt` in the same venv. HTTP: check the server is running and `MCP_URL` is right |
 | HTTP 421 or "Invalid Host header" from the MCP server | Add your host name to `MCP_ALLOWED_HOSTS` in `.env` |
 | Tool results say "Cannot reach the product API" | `API_BASE_URL` wrong, or the API is not running |
-| AI pods in `CreateContainerConfigError` | Secret `lab4-ai-env` missing: create it (section 10) |
+| `/retrieve` returns `"mode": "keyword"` | No vectors yet. `ollama pull nomic-embed-text`, make sure the API can reach Ollama (`/knowledge/status` shows `last_error`), then `POST /knowledge/sync` |
+| `/knowledge/status` shows `HTTP 404 … model not found` | Pull the embedding model: `ollama pull nomic-embed-text` |
+| `"knowledge_documents": 0` | `knowledge\` not found: run the API from the project folder, check `KNOWLEDGE_DIR`, or rebuild the image (Kubernetes) |
+| RAG answers "I found nothing relevant" | Check `/retrieve?q=…` directly; add or improve the runbook, or ask with words closer to the documents |
+| Retrieval quality dropped after changing models | Vectors from the old model are ignored: `POST /knowledge/reembed` |
+| AI pods in `CreateContainerConfigError` | Secret `lab4-ai-env` missing: create it (section 11) |
 | 504 from nginx on long answers | Model too slow (Ingress allows 300 s). Use a smaller model or OpenAI |
 | Claude Desktop does not show the tools | Check the paths in its config point to `.venv\Scripts\python.exe` and `mcp_server\server.py`, and that the API in `API_BASE_URL` is running; see Claude Desktop's MCP logs |
 
@@ -812,7 +992,7 @@ kubectl describe pod <pod-name>
 
 ---
 
-## 18. Clean up
+## 19. Clean up
 
 **Local:** press Ctrl+C in each terminal. Delete the `data` folder to remove local data, and `.venv` to remove the Python packages.
 
@@ -840,13 +1020,15 @@ Deleting `k8s-local.yaml` also deletes the `lab4-data` volume and everything in 
 
 ---
 
-## 19. Limitations and security notes
+## 20. Limitations and security notes
 
 - **For learning only.** Credentials (`admin`/`123456`, `jwt_secret`) are demo values. Never reuse them.
 - The API has **no authentication yet**; anyone who can reach it can change data. The planned `/token` endpoint addresses this.
 - **SQLite** means a single API replica. Switch `DATABASE_URL` to PostgreSQL to scale out.
 - Assistant conversations live **in memory**: a restart clears them, and the assistant runs as one replica.
-- `/search` is **keyword** search. Vector search (RAG) over the same chunks is the next lab.
+- Vector search is **brute force** over vectors stored in SQLite: fine for thousands of chunks. At scale, use a vector index such as pgvector (as in the book) or OpenSearch.
+- Retrieval is **not permission-aware**: every user can retrieve every runbook and spec. Chapter 4 requires identity, document-level access control, metadata filters and audit logs before production use.
+- RAG evaluation covers retrieval hit rate only (`scripts\rag_eval.py`); answer faithfulness is checked by reading the citations.
 - Scanned PDFs need **OCR** before they are searchable.
 - The approval gate is enforced by **this assistant**. Other MCP hosts use their own tool-permission prompts, so the API itself still needs auth before real use.
 - The local MCP HTTP server listens on `127.0.0.1` only. Use `--host 0.0.0.0` only on a trusted network.

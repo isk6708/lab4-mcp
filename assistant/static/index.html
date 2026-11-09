@@ -58,6 +58,10 @@
   .step { border-left: 3px solid var(--line); padding: 4px 8px; margin: 6px 0; }
   .step.tool_call { border-color: var(--accent); } .step.observation { border-color: var(--ok); }
   .step.approval, .step.limit { border-color: var(--warn-line); } .step.error { border-color: var(--bad); }
+  .step.retrieval { border-color: var(--accent); }
+  .sources { margin-top: 8px; font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 6px; }
+  .sources ol { margin: 4px 0 0; padding-left: 20px; } .sources li { margin: 2px 0; }
+  .score { color: var(--muted); }
   .step pre { margin: 4px 0 0; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
   .approval-card { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px; padding: 10px 14px; max-width: 860px; }
   .approval-card .actions { display: flex; gap: 8px; margin-top: 8px; }
@@ -86,6 +90,7 @@
       <select id="mode">
         <option value="agent">Agent (multi-step)</option>
         <option value="assistant">Assistant (one tool round)</option>
+        <option value="rag">RAG (retrieve, then answer)</option>
         <option value="chat">Chat only (no tools)</option>
       </select>
     </label>
@@ -97,6 +102,7 @@
   <aside>
     <h2>What the modes show</h2>
     <p class="explain"><b>Chat only:</b> one LLM call, no tools; it cannot see your data.<br>
+      <b>RAG:</b> search specs and runbooks by meaning, then one LLM call answers from those passages with citations.<br>
       <b>Assistant:</b> the LLM may call tools once, then must answer.<br>
       <b>Agent:</b> reason → call tools → read results → repeat until done (ReAct loop), within the step budget. Tools that change data stop and ask you first.</p>
     <h2>Attach a spec PDF</h2>
@@ -124,6 +130,8 @@ const state = { conversationId: null, config: null, busy: false };
 const SUGGESTIONS = [
   "List all products as a table",
   "What warranty does Platform Component have? Cite the page.",
+  "Why is my pod in CrashLoopBackOff?",
+  "My PDF upload fails with 413. What should I do?",
   "Which products have spec sheets attached?",
   "Create a product called Edge Gateway, price 150, stock 10",
   "Increase the stock of Platform Component by 3",
@@ -179,17 +187,27 @@ function addMessage(kind, html) {
 
 function renderTrace(trace) {
   if (!trace || !trace.length) return "";
-  const icons = { thought: "🧠 Thought", tool_call: "🔧 Tool call", observation: "📄 Result", approval: "✋ Approval", error: "⚠️ Error", limit: "⏱ Step budget" };
+  const icons = { retrieval: "🔎 Retrieval", thought: "🧠 Thought", tool_call: "🔧 Tool call", observation: "📄 Result", approval: "✋ Approval", error: "⚠️ Error", limit: "⏱ Step budget" };
   const steps = trace.map(t => {
     let body = "";
     if (t.type === "tool_call") body = `<b>${esc(t.tool)}</b>${t.needs_approval ? " (waiting for approval)" : ""}<pre>${esc(JSON.stringify(t.arguments, null, 2))}</pre>`;
     else if (t.type === "observation") body = `<b>${esc(t.tool)}</b><pre>${esc(t.text)}</pre>`;
     else if (t.type === "approval") body = `<b>${esc(t.tool)}</b> ${esc(t.decision)} by you`;
+    else if (t.type === "retrieval") body = `<b>${esc(t.tool)}</b><pre>${esc(JSON.stringify(t.arguments))}</pre>${esc(t.text)}`;
     else body = esc(t.text);
     return `<div class="step ${t.type}"><div>${icons[t.type] || t.type}</div>${body}</div>`;
   }).join("");
-  const calls = trace.filter(t => t.type === "tool_call" || t.type === "approval").length;
-  return `<details class="trace"><summary>Show agent steps (${calls} tool call${calls === 1 ? "" : "s"})</summary>${steps}</details>`;
+  const calls = trace.filter(t => t.type === "tool_call" || t.type === "approval" || t.type === "retrieval").length;
+  return `<details class="trace"><summary>Show steps (${calls} tool call${calls === 1 ? "" : "s"})</summary>${steps}</details>`;
+}
+
+function renderSources(r) {
+  if (!r.sources) return "";
+  const mode = r.retrieval_mode ? ` · ${esc(r.retrieval_mode)} search` : "";
+  const note = r.note ? `<div class="score">${esc(r.note)}</div>` : "";
+  if (!r.sources.length) return `<div class="sources"><b>Sources</b>${mode}: none found${note}</div>`;
+  const items = r.sources.map(s => `<li><b>${esc(s.title)}</b>: ${esc(s.citation)} <span class="score">· score ${esc(s.relevance_score)} · updated ${esc(s.last_updated)}${s.owner ? " · owner " + esc(s.owner) : ""}</span></li>`).join("");
+  return `<div class="sources"><b>Sources</b>${mode}${note}<ol>${items}</ol></div>`;
 }
 
 function settings() {
@@ -211,7 +229,7 @@ function showResult(r) {
     card.querySelectorAll("button").forEach(b => b.onclick = () => decide(b.dataset.d, card));
     $("messages").appendChild(card); scrollDown(); return;
   }
-  addMessage("assistant", markdown(r.answer) + renderTrace(r.trace) + meta);
+  addMessage("assistant", markdown(r.answer) + renderSources(r) + renderTrace(r.trace) + meta);
 }
 
 async function post(url, body) {

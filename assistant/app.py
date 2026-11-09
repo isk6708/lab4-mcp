@@ -8,6 +8,7 @@ Run locally:  uvicorn assistant.app:app --port 8300   (reads .env from the proje
 """
 import base64
 import builtins
+import json
 import os
 from collections import OrderedDict
 from pathlib import Path
@@ -26,11 +27,13 @@ from pydantic import BaseModel, Field  # noqa: E402
 from assistant import mcp_client  # noqa: E402
 from assistant.agent import Agent, Conversation  # noqa: E402
 from assistant.llm import client_for, load_providers, provider_status  # noqa: E402
+from assistant.rag import answer_with_rag  # noqa: E402
 
 APPROVAL_TOOLS = [t.strip() for t in os.getenv(
     "APPROVAL_TOOLS",
     "create_product,update_product,delete_product,upload_product_attachment,delete_attachment").split(",") if t.strip()]
 DEFAULT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "6"))
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
 MAX_CONVERSATIONS = 200
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -81,6 +84,17 @@ def friendly_error(exc: BaseException, provider_id: str, model: str) -> str:
     return f"{name}: {exc}"
 
 
+def mcp_searcher(session):
+    """Retriever used by RAG mode: the search_knowledge MCP tool (-> API /retrieve)."""
+    async def search(question: str, top_k: int) -> dict:
+        result = await session.call_tool("search_knowledge", {"question": question, "top_k": top_k})
+        text = mcp_client.result_text(result, limit=200_000)
+        if getattr(result, "isError", False):
+            raise RuntimeError(text)
+        return json.loads(text)
+    return search
+
+
 async def run_turn(conv: Conversation, provider_id: str, model: str, mode: str,
                    max_steps: int, decision: Optional[str] = None) -> dict:
     providers = load_providers()
@@ -91,13 +105,22 @@ async def run_turn(conv: Conversation, provider_id: str, model: str, mode: str,
         raise HTTPException(400, "OpenAI is not configured: set OPENAI_API_KEY in .env")
 
     llm = client_for(provider)
-    steps = {"chat": 1, "assistant": 1}.get(mode, max(1, min(max_steps, 15)))
+    steps = {"chat": 1, "assistant": 1, "rag": 1}.get(mode, max(1, min(max_steps, 15)))
     common = dict(max_steps=steps, approval_tools=APPROVAL_TOOLS, temperature=provider.temperature,
                   supports_tool_choice=(provider.id == "openai"))
 
     snap = conv.snapshot()
     try:
-        if mode == "chat":
+        if mode == "rag":
+            question = conv.messages[-1]["content"]
+            async with mcp_client.mcp_session() as session:
+                rag = await answer_with_rag(llm, model, question, mcp_searcher(session), RAG_TOP_K, provider.temperature)
+            conv.messages.append({"role": "assistant", "content": rag["answer"]})
+            trace = [{"type": "retrieval", "tool": "search_knowledge", "arguments": {"question": question, "top_k": RAG_TOP_K},
+                      "text": f"mode={rag['retrieval_mode']}, coverage={rag['coverage']}, {len(rag['sources'])} passages"}]
+            result = {"status": "done", "answer": rag["answer"], "sources": rag["sources"], "trace": trace, "steps": 1,
+                      "retrieval_mode": rag["retrieval_mode"], "note": rag.get("note")}
+        elif mode == "chat":
             result = await Agent(llm, model, None, [], use_tools=False, **common).run(conv, decision)
         else:
             async with mcp_client.mcp_session() as session:
@@ -124,7 +147,7 @@ async def run_turn(conv: Conversation, provider_id: str, model: str, mode: str,
 class TurnSettings(BaseModel):
     provider: str
     model: str
-    mode: Literal["agent", "assistant", "chat"] = "agent"
+    mode: Literal["agent", "assistant", "rag", "chat"] = "agent"
     max_steps: int = Field(DEFAULT_MAX_STEPS, ge=1, le=15)
 
 
@@ -195,6 +218,25 @@ async def approve(req: ApproveRequest):
     if not conv or not conv.pending:
         raise HTTPException(409, "Nothing is waiting for approval in this conversation")
     return await run_turn(conv, req.provider, req.model, req.mode, req.max_steps, decision=req.decision)
+
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=2, max_length=4000)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+@app.post("/api/ask")
+async def ask(req: AskRequest):
+    """Single-shot RAG like the book's /ask: retrieve, then answer with sources. No conversation state."""
+    provider_id = req.provider or os.getenv("LLM_DEFAULT_PROVIDER", "ollama")
+    model = req.model or os.getenv("LLM_DEFAULT_MODEL", "")
+    if not model:
+        raise HTTPException(400, "Give a model, or set LLM_DEFAULT_MODEL in .env")
+    conv = Conversation()
+    conv.messages.append({"role": "user", "content": req.question})
+    result = await run_turn(conv, provider_id, model, "rag", 1)
+    return {k: result.get(k) for k in ("status", "answer", "sources", "retrieval_mode", "note", "provider", "model")}
 
 
 @app.post("/api/attach")

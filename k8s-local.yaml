@@ -69,6 +69,14 @@ spec:
             secretKeyRef:
               name: platform-local-secrets
               key: jwt_secret
+        - name: KNOWLEDGE_DIR             # runbooks/postmortems/blueprints baked into the image
+          value: /app/knowledge
+        - name: OLLAMA_BASE_URL           # embeddings from Ollama on your Windows host
+          value: http://host.docker.internal:11434/v1
+        envFrom:                          # optional: EMBEDDING_PROVIDER/MODEL, OPENAI_API_KEY from .env
+        - secretRef:
+            name: lab4-ai-env
+            optional: true
         volumeMounts:
         - name: data
           mountPath: /app/data
