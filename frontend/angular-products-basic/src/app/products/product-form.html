@@ -1,0 +1,48 @@
+<h2>{{ isEdit() ? 'Edit product #' + id() : 'New product' }}</h2>
+
+@if (error()) {
+  <p class="alert error">{{ error() }}</p>
+}
+
+@if (loading()) {
+  <p class="muted">Loading product…</p>
+} @else {
+  <form class="card" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+    <label>
+      Name
+      <input formControlName="name" autocomplete="off" />
+      @if (showError('name')) {
+        <span class="field-error">Name is required (up to 100 characters).</span>
+      }
+    </label>
+
+    <label>
+      Description
+      <textarea formControlName="description" rows="3"></textarea>
+    </label>
+
+    <div class="row">
+      <label>
+        Price
+        <input type="number" formControlName="price" min="0" step="0.01" />
+        @if (showError('price')) {
+          <span class="field-error">Price must be 0 or more.</span>
+        }
+      </label>
+      <label>
+        Stock
+        <input type="number" formControlName="stock" min="0" step="1" />
+        @if (showError('stock')) {
+          <span class="field-error">Stock must be a whole number, 0 or more.</span>
+        }
+      </label>
+    </div>
+
+    <div class="form-actions">
+      <button class="primary" type="submit" [disabled]="saving()">
+        {{ saving() ? 'Saving…' : (isEdit() ? 'Save changes' : 'Create product') }}
+      </button>
+      <a routerLink="/products">Cancel</a>
+    </div>
+  </form>
+}

@@ -1,0 +1,17 @@
+<header>
+  <a class="brand" routerLink="/products">Lab 4 Products</a>
+  <span class="tag">v2 · JWT login</span>
+  <span class="api">API: {{ apiUrl }}/secure/products</span>
+  @if (auth.username(); as user) {
+    <span class="user">
+      Signed in as <strong>{{ user }}</strong>
+      @if (auth.expiresAt(); as expires) {
+        <span class="muted">· session until {{ expires | date: 'HH:mm' }}</span>
+      }
+    </span>
+    <button type="button" (click)="auth.logout()">Sign out</button>
+  }
+</header>
+<main>
+  <router-outlet />
+</main>

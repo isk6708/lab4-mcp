@@ -11,7 +11,7 @@ metadata:
 type: Opaque
 stringData:
   connection_string: "sqlite:////app/data/app_platform.db"
-  jwt_secret: "lab4-platform-secret-key"
+  jwt_secret: "lab4-platform-jwt-secret-demo-only-32+chars"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

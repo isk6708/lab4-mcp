@@ -112,6 +112,15 @@ class KnowledgeChunkDB(Base):
     document = relationship("KnowledgeDocDB", back_populates="chunks")
 
 
+def get_db():
+    """FastAPI dependency: one database session per request."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()

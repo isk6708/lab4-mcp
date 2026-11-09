@@ -24,7 +24,7 @@ services:
       PORT: "8121"
       DATA_DIR: /app/data
       DATABASE_URL: sqlite:////app/data/app_platform.db
-      JWT_SECRET: lab4-platform-secret-key
+      JWT_SECRET: lab4-platform-jwt-secret-demo-only-32+chars
       MAX_UPLOAD_MB: "20"
       KNOWLEDGE_DIR: /app/knowledge
       OLLAMA_BASE_URL: http://host.docker.internal:11434/v1   # embeddings from Ollama on your PC

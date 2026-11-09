@@ -1,0 +1,22 @@
+<form class="card" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+  <h2>Sign in</h2>
+
+  @if (reason() === 'expired') {
+    <p class="alert info">Your session ended. Please sign in again.</p>
+  }
+  @if (error()) {
+    <p class="alert error">{{ error() }}</p>
+  }
+
+  <label>
+    Username
+    <input formControlName="username" autocomplete="username" />
+  </label>
+  <label>
+    Password
+    <input type="password" formControlName="password" autocomplete="current-password" />
+  </label>
+
+  <button class="primary" type="submit" [disabled]="busy()">{{ busy() ? 'Signing in…' : 'Sign in' }}</button>
+  <p class="muted hint">Lab demo user: <code>admin</code> / <code>123456</code></p>
+</form>

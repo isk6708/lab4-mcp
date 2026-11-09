@@ -1,0 +1,6 @@
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+.toolbar h2 { margin: 0 auto 0 0; }
+.toolbar input { width: 240px; }
+.actions { white-space: nowrap; display: flex; gap: 12px; justify-content: flex-end; }
+.low { color: var(--danger); font-weight: 600; }
+.summary { margin-top: 10px; font-size: 13px; }

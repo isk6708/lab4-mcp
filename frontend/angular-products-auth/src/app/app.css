@@ -1,0 +1,5 @@
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; font-size: 17px; color: var(--ink); text-decoration: none; }
+.tag { font-size: 12px; background: #eef4ff; color: var(--accent); padding: 2px 8px; border-radius: 99px; }
+.api { margin-left: auto; margin-right: 8px; font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.user { font-size: 13px; }

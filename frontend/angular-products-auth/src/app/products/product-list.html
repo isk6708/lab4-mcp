@@ -1,0 +1,57 @@
+<section class="toolbar">
+  <h2>Products</h2>
+  <input
+    type="search"
+    placeholder="Search name or description"
+    aria-label="Search products"
+    [value]="search()"
+    (input)="onSearch($event)"
+  />
+  <button type="button" (click)="load()" [disabled]="loading()">Refresh</button>
+  <a class="button primary" routerLink="/products/new">+ New product</a>
+</section>
+
+@if (error()) {
+  <p class="alert error">{{ error() }}</p>
+}
+
+@if (loading() && products().length === 0) {
+  <p class="muted">Loading products…</p>
+} @else if (filtered().length === 0) {
+  <p class="muted">
+    @if (search()) { No products match "{{ search() }}". } @else { No products yet. Create the first one. }
+  </p>
+} @else {
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Description</th>
+          <th class="num">Price</th>
+          <th class="num">Stock</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of filtered(); track p.id) {
+          <tr>
+            <td>{{ p.id }}</td>
+            <td><strong>{{ p.name }}</strong></td>
+            <td class="muted">{{ p.description || '—' }}</td>
+            <td class="num">{{ p.price | number: '1.2-2' }}</td>
+            <td class="num" [class.low]="p.stock < 5">{{ p.stock }}</td>
+            <td class="actions">
+              <a [routerLink]="['/products', p.id, 'edit']">Edit</a>
+              <button type="button" class="link danger" (click)="remove(p)">Delete</button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+  <p class="muted summary">
+    Showing {{ filtered().length }} of {{ products().length }} products · stock value {{ stockValue() | number: '1.2-2' }}
+  </p>
+}

@@ -14,29 +14,35 @@ try:  # local runs read the project's .env; real environment variables (Docker, 
 except ImportError:
     pass
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status  # noqa: E402
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile, status  # noqa: E402
 from fastapi.concurrency import run_in_threadpool  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
-from passlib.context import CryptContext  # noqa: E402
+from fastapi.security import OAuth2PasswordRequestForm  # noqa: E402
 from pydantic import BaseModel, ConfigDict  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app.auth import authenticate, get_current_user, hash_password  # noqa: E402
 from app.db import (UPLOAD_DIR, AttachmentChunkDB, AttachmentDB, KnowledgeDocDB, ProductDB,  # noqa: E402
-                    SessionLocal, UserDB, init_db)
+                    SessionLocal, UserDB, get_db, init_db)
 from app.embeddings import embedder  # noqa: E402
 from app.knowledge_service import (CHUNK_OVERLAP, CHUNK_SIZE, SOURCES, embed_missing,  # noqa: E402
                                    knowledge_status, retrieve, spec_embedding_text, sync_knowledge)
 from app.pdf_utils import chunk_pages, extract_pages, is_pdf  # noqa: E402
+from app.tokens import create_access_token  # noqa: E402
 from app.vectors import pack  # noqa: E402
 
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-secret")  # used by the upcoming /token endpoint
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 SYNC_ON_STARTUP = os.getenv("KNOWLEDGE_SYNC_ON_STARTUP", "true").lower() == "true"
+# Browser apps allowed to call the API (Angular dev servers: v1 on 4200, v2 on 4201)
+CORS_ORIGINS = [o.strip() for o in os.getenv(
+    "CORS_ORIGINS", "http://localhost:4200,http://localhost:4201,http://127.0.0.1:4200,http://127.0.0.1:4201"
+).split(",") if o.strip()]
+# The unauthenticated /products routes (Angular v1, MCP server). Set false to require login everywhere.
+OPEN_PRODUCT_API = os.getenv("OPEN_PRODUCT_API", "true").lower() == "true"
 
 log = logging.getLogger("lab4")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 init_db()
 
 
@@ -96,6 +102,20 @@ class SearchHit(BaseModel):
     snippet: str
 
 
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    username: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 class KnowledgeDocResponse(BaseModel):
     id: int
     source_path: str
@@ -120,14 +140,6 @@ def to_attachment_response(a: AttachmentDB) -> AttachmentResponse:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def get_product_or_404(db: Session, product_id: int) -> ProductDB:
     product = db.get(ProductDB, product_id)
     if not product:
@@ -153,7 +165,7 @@ def seed_fake_user():
     db = SessionLocal()
     try:
         if not db.query(UserDB).filter(UserDB.username == "admin").first():
-            db.add(UserDB(username="admin", hashed_password=pwd_context.hash("123456"), is_active=True))
+            db.add(UserDB(username="admin", hashed_password=hash_password("123456"), is_active=True))
             db.commit()
             print("🚀 Platform Setup: Fake user 'admin' seeded with encrypted password '123456'.")
     finally:
@@ -182,6 +194,13 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Lab4 Platform Engineering Local Testbed", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],   # includes Authorization for the /secure routes
+)
+
 
 # ---------------------------------------------------------------------------
 # Health
@@ -192,9 +211,32 @@ def health_check():
 
 
 # ---------------------------------------------------------------------------
-# Products
+# Authentication (Angular v2, Swagger "Authorize" button)
 # ---------------------------------------------------------------------------
-@app.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/token", response_model=TokenResponse, tags=["auth"])
+def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """OAuth2 password flow: form fields username + password -> JWT access token."""
+    user = authenticate(db, form.username, form.password)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password",
+                            headers={"WWW-Authenticate": "Bearer"})
+    token, lifetime = create_access_token(user.username)
+    return TokenResponse(access_token=token, expires_in=lifetime, username=user.username)
+
+
+@app.get("/users/me", response_model=UserResponse, tags=["auth"])
+def read_me(user: UserDB = Depends(get_current_user)):
+    """Who does this token belong to?"""
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Products: one router, mounted twice (see the bottom of this section)
+# ---------------------------------------------------------------------------
+products_router = APIRouter()
+
+
+@products_router.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(product: ProductCreate, db: Session = Depends(get_db)):
     db_product = ProductDB(**product.model_dump())
     db.add(db_product)
@@ -203,12 +245,12 @@ def create_product(product: ProductCreate, db: Session = Depends(get_db)):
     return db_product
 
 
-@app.get("/products", response_model=List[ProductResponse])
+@products_router.get("/products", response_model=List[ProductResponse])
 def read_products(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.query(ProductDB).offset(skip).limit(limit).all()
 
 
-@app.get("/products/{product_id}", response_model=ProductDetailResponse)
+@products_router.get("/products/{product_id}", response_model=ProductDetailResponse)
 def read_product(product_id: int, db: Session = Depends(get_db)):
     p = get_product_or_404(db, product_id)
     return ProductDetailResponse(
@@ -217,7 +259,7 @@ def read_product(product_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.put("/products/{product_id}", response_model=ProductResponse)
+@products_router.put("/products/{product_id}", response_model=ProductResponse)
 def update_product(product_id: int, updated_product: ProductCreate, db: Session = Depends(get_db)):
     db_product = get_product_or_404(db, product_id)
     for key, value in updated_product.model_dump().items():
@@ -227,7 +269,7 @@ def update_product(product_id: int, updated_product: ProductCreate, db: Session 
     return db_product
 
 
-@app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@products_router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(product_id: int, db: Session = Depends(get_db)):
     db_product = get_product_or_404(db, product_id)
     files = [a.stored_filename for a in db_product.attachments]
@@ -236,6 +278,14 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     for f in files:
         remove_file(f)
     return None
+
+
+# Open:   /products/...         no login (Angular v1, MCP server, assistant)
+# Secure: /secure/products/...  needs "Authorization: Bearer <token>" from POST /token (Angular v2)
+if OPEN_PRODUCT_API:
+    app.include_router(products_router, tags=["products (open)"])
+app.include_router(products_router, prefix="/secure", tags=["products (secure: JWT)"],
+                   dependencies=[Depends(get_current_user)])
 
 
 # ---------------------------------------------------------------------------
